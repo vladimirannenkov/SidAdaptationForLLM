@@ -1,0 +1,21 @@
+# Секреты
+.comet.config
+.comet-*
+*.env
+wandb/
+
+# Python
+__pycache__/
+*.pyc
+
+# Данные — большие, воспроизводимы через src/data/wikitext/{train_tokenizer,prepare}.py
+data/wikitext/raw_cache/
+data/wikitext/bin/
+
+# Чекпоинты и прочие результаты обучения — большие бинарники, не код
+checkpoints/
+checkpoints_*/
+artifacts/
+
+# Claude Code
+.claude/
