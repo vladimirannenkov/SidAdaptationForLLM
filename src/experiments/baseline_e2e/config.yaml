@@ -1,0 +1,41 @@
+# E2E-baseline: обычная полная модель, сквозной backprop по всей сети.
+# Точка сравнения для всех SID/Newton/Cascade вариантов (PLAN.md §9.2).
+model:
+  block_size: 256
+  vocab_size: 16384
+  n_layer: 12
+  n_head: 4
+  n_embd: 272
+  dropout: 0.0
+  bias: true
+
+data:
+  data_dir: data/wikitext
+
+train:
+  micro_batch_size: 64
+  grad_accumulation_steps: 4
+  grad_clip: 1.0
+  peak_lr: 3.0e-4
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  target_tokens: 100000000
+  train_metrics_every: 20
+  validation_every: 200
+  validation_batches: 20
+  eval_seed: 1337
+
+checkpoint:
+  dir: checkpoints
+
+comet:
+  enabled: true
+  workspace: team-rl-exp
+
+# --smoke-test замещает эти поля в train.train, отключает Comet и пишет в
+# checkpoints_smoke/baseline_e2e/ (см. src/common/config.py::apply_smoke_overrides).
+smoke:
+  target_tokens: 200000
+  train_metrics_every: 1
+  validation_every: 5
+  validation_batches: 2
