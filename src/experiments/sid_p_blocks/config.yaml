@@ -1,0 +1,47 @@
+# SID-P: backbone (первые k слоёв) — веса из готового E2E-чекпоинта, но, В
+# ОТЛИЧИЕ ОТ SID-F, НЕ заморожен — продолжает обучаться собственным
+# multi-token лоссом. Верхние блоки — с нуля, полная consistency-формула
+# (docs/PLAN.md §5.1), chunked (src/sid/chunked.py::chunked_consistency_loss).
+model:
+  block_size: 256
+  vocab_size: 16384
+  n_layer: 12
+  n_head: 4
+  n_embd: 272
+  dropout: 0.0
+  bias: true
+
+data:
+  data_dir: data/wikitext
+
+sid:
+  k: 6
+  source_checkpoint: checkpoints/checkpoint_50pct.pt
+  tau: 1.0
+  lambda_target: 0.5
+  lambda_warmup_fraction: 0.10
+
+train:
+  micro_batch_size: 64
+  grad_accumulation_steps: 4
+  grad_clip: 1.0
+  peak_lr: 3.0e-4
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  target_tokens: 100000000
+  min_train_metric_points: 30
+  validation_every: 100
+  validation_batches: 20
+  eval_seed: 1337
+
+checkpoint:
+  dir: checkpoints_sid_p_blocks
+
+comet:
+  enabled: true
+  workspace: team-rl-exp
+
+smoke:
+  target_tokens: 200000
+  validation_every: 5
+  validation_batches: 2
