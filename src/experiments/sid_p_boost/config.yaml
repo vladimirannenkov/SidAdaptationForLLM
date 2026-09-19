@@ -1,0 +1,47 @@
+# SID-P-Boost: тот же backbone-режим, что SID-P (первые k слоёв из
+# E2E-чекпоинта, по умолчанию НЕ заморожен), но верхние блоки обучаются
+# BOOSTING-лоссом (src/sid/chunked.py::chunked_boost_loss) вместо
+# consistency-KL — см. docs/boosting_explained.md почему (+4.65% против +1.4%).
+model:
+  block_size: 256
+  vocab_size: 16384
+  n_layer: 12
+  n_head: 4
+  n_embd: 272
+  dropout: 0.0
+  bias: true
+
+data:
+  data_dir: data/wikitext
+
+sid:
+  k: 6
+  source_checkpoint: checkpoints/checkpoint_50pct.pt
+  block_size: 1          # сколько слоёв объединяются в один верхний блок
+  freeze_readout: none    # none | except-last
+  freeze_backbone_from: null  # путь к SID-чекпоинту -> backbone+readout заморожены целиком
+
+train:
+  micro_batch_size: 64
+  grad_accumulation_steps: 4
+  grad_clip: 1.0
+  peak_lr: 3.0e-4
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  target_tokens: 100000000
+  min_train_metric_points: 30
+  validation_every: 100
+  validation_batches: 20
+  eval_seed: 1337
+
+checkpoint:
+  dir: checkpoints_sid_p_boost
+
+comet:
+  enabled: true
+  workspace: team-rl-exp
+
+smoke:
+  target_tokens: 200000
+  validation_every: 5
+  validation_batches: 2
