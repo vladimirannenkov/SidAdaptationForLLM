@@ -1,0 +1,48 @@
+# SID-F: backbone из готового E2E-чекпоинта, ЗАМОРОЖЕН; верхние слои
+# переинициализированы и обучаются каждый своим ЛОКАЛЬНЫМ CE (lambda=0 —
+# обязательный контроль локального CE, docs/PLAN.md §5.1/§5.2). См. docs/starts.md
+# для готовых команд запуска (k=3 и k=5).
+model:
+  block_size: 256
+  vocab_size: 16384
+  n_layer: 12
+  n_head: 4
+  n_embd: 272
+  dropout: 0.0
+  bias: true
+
+data:
+  data_dir: data/wikitext
+
+sid:
+  k: 6
+  source_checkpoint: checkpoints/checkpoint_50pct.pt
+  block_size: 1
+  lambda_div: 0.0          # вес штрафа за линейность (CKA) между соседними глубинами
+  freeze_readout: none      # none | except-last | all
+
+train:
+  micro_batch_size: 64
+  grad_accumulation_steps: 4
+  grad_clip: 1.0
+  peak_lr: 3.0e-4
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  target_tokens: 5000000    # короткий пилот по умолчанию; полный прогон — передать --target-tokens явно
+  train_metrics_every: 20
+  validation_every: 200
+  validation_batches: 20
+  eval_seed: 1337
+
+checkpoint:
+  dir: checkpoints_sid_f
+
+comet:
+  enabled: true
+  workspace: team-rl-exp
+
+smoke:
+  target_tokens: 200000
+  train_metrics_every: 1
+  validation_every: 5
+  validation_batches: 2
