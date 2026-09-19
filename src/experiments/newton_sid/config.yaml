@@ -1,0 +1,53 @@
+# Newton-SID: backbone (k слоёв) заморожен, верхние блоки обучаются
+# boosting-конструкцией (как sid_p_boost), но с доп. вспомогательным
+# Newton-лоссом на "сырую" коррекцию блока (src/sid/newton.py,
+# src/sid/chunked.py::chunked_boost_newton_loss) — точная квадратичная
+# Тейлор-аппроксимация CE вокруг предыдущей (detached) точки.
+model:
+  block_size: 256
+  vocab_size: 16384
+  n_layer: 12
+  n_head: 4
+  n_embd: 272
+  dropout: 0.0
+  bias: true
+
+data:
+  data_dir: data/wikitext
+
+sid:
+  k: 6
+  source_checkpoint: checkpoints/checkpoint_50pct.pt
+  block_size: 1
+  freeze_readout: none        # none | except-last
+  freeze_backbone_from: null   # SID-чекпоинт -> backbone+readout заморожены целиком
+  freeze_backbone: true        # backbone из source_checkpoint заморожен, readout обучаем (основной режим)
+  newton_lambda: 0.01          # Tikhonov/Levenberg-Marquardt damping
+  newton_beta: 1.0             # вес вспомогательного Newton-лосса относительно CE
+  include_curvature: true      # false -> "Residual-SID" (только линейный член)
+  trust_region: null           # если задан: delta*tanh(dz/delta) перед CE и Newton-лоссом
+
+train:
+  micro_batch_size: 64
+  grad_accumulation_steps: 4
+  grad_clip: 1.0
+  peak_lr: 3.0e-4
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  target_tokens: 100000000
+  min_train_metric_points: 30
+  validation_every: 100
+  validation_batches: 20
+  eval_seed: 1337
+
+checkpoint:
+  dir: checkpoints_newton_sid
+
+comet:
+  enabled: true
+  workspace: team-rl-exp
+
+smoke:
+  target_tokens: 200000
+  validation_every: 5
+  validation_batches: 2
