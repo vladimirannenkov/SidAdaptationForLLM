@@ -1,0 +1,46 @@
+# Cascade-SID: E2E backbone+readout полностью заморожены, верхние блоки
+# обучаются ПОСЛЕДОВАТЕЛЬНО, по одному ("frozen-prefix" — все предыдущие
+# stage уже завершены и заморожены), three-zone loss
+# (src/cascade/losses.py::cascade_three_zone_loss): correct/refine/preserve
+# зоны по уверенности старого предсказания в истинном токене.
+model:
+  block_size: 256
+  vocab_size: 16384
+  n_layer: 12
+  n_head: 4
+  n_embd: 272
+  dropout: 0.0
+  bias: true
+
+data:
+  data_dir: data/wikitext
+
+cascade:
+  k: 6
+  source_checkpoint: checkpoints/checkpoint_100pct.pt
+  correct_threshold: 0.2
+  preserve_threshold: 0.8
+  refine_weight: 0.5
+  preserve_weight: 1.0
+
+train:
+  micro_batch_size: 64
+  grad_accumulation_steps: 4
+  grad_clip: 1.0
+  peak_lr: 3.0e-4
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  target_tokens: 100000000
+  validation_batches: 20
+  eval_seed: 1337
+
+checkpoint:
+  dir: checkpoints_cascade
+
+comet:
+  enabled: true
+  workspace: team-rl-exp
+
+smoke:
+  target_tokens: 200000
+  validation_batches: 2
