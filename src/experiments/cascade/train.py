@@ -1,17 +1,27 @@
-"""Cascade-SID: sequential frozen-prefix training. E2E backbone+readout are
-loaded from a finished E2E checkpoint and fully frozen; upper layers train
-ONE AT A TIME (each stage completed and frozen before the next starts), each
-stage's own single-layer "innovation" scaled by a learnable alpha and added
-to the frozen prefix's logits. Loss is three-zone
+"""Cascade-SID: sequential frozen-prefix training. Embeddings+readout are
+loaded from a finished E2E checkpoint and stay frozen for the whole run;
+upper layers (grouped into blocks of --block-size layers each) train ONE
+BLOCK AT A TIME (each stage completed and frozen before the next starts),
+each stage's own "innovation" (block output minus block input) scaled by a
+learnable alpha and added to the frozen prefix's logits. Loss is three-zone
 (src/cascade/losses.py::cascade_three_zone_loss): tokens where the frozen
 prefix is already confidently wrong/right/uncertain get different treatment
 (correct/refine/preserve), so a new stage focuses on what previous stages
 have NOT already solved rather than duplicating their work.
 
+--k — глубина замороженного (не переинициализируемого) backbone из
+source-checkpoint; k=0 означает "без backbone" — все n_layer слоёв
+переинициализированы и обучаются каскадом, из чекпоинта берутся только
+embeddings и readout (они всё равно всегда заморожены, независимо от k).
+--block-size — сколько слоёв объединяются в один stage (по умолчанию 1,
+как в первой версии).
+
 Запуск (из корня репозитория):
-    python src/experiments/cascade/train.py --k 6
+    python src/experiments/cascade/train.py --k 6 --block-size 1
+    python src/experiments/cascade/train.py --k 6 --block-size 2
+    python src/experiments/cascade/train.py --k 0 --block-size 3
     python src/experiments/cascade/train.py --smoke-test
-    python src/experiments/cascade/train.py --resume checkpoints_cascade/k6_.../latest.pt
+    python src/experiments/cascade/train.py --resume checkpoints_cascade/k6_bs1_.../latest.pt
 """
 
 import argparse
@@ -46,6 +56,8 @@ def parse_args(cascade_cfg):
     parser.add_argument("--config", default=str(EXPERIMENT_DIR / "config.yaml"))
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--k", type=int, default=cascade_cfg["k"])
+    parser.add_argument("--block-size", type=int, default=cascade_cfg.get("block_size", 1),
+                         help="сколько слоёв объединяются в один stage (по умолчанию 1)")
     parser.add_argument("--source-checkpoint", default=cascade_cfg["source_checkpoint"])
     parser.add_argument("--target-tokens", type=int, default=None)
     parser.add_argument("--resume", default=None, help="Cascade latest.pt to continue exactly")
@@ -80,6 +92,7 @@ def main():
         # A resumed run is defined by its original experiment, not new defaults.
         saved = resume_state["config"]
         args.k = saved["k"]
+        args.block_size = saved.get("upper_block_size", 1)
         args.correct_threshold = saved["correct_threshold"]
         args.preserve_threshold = saved["preserve_threshold"]
         args.refine_weight = saved["refine_weight"]
@@ -88,9 +101,11 @@ def main():
 
     config = GPTConfig(**m)
     K = args.k
-    assert 0 < K < config.n_layer
-    num_stages = config.n_layer - K
-    assert num_stages == 6, "первая версия Cascade-SID рассчитана на k=6 и 6 stages"
+    UPPER_BLOCK_SIZE = args.block_size
+    assert 0 <= K < config.n_layer, f"k должен быть между 0 и n_layer={config.n_layer} (получено {K})"
+    BLOCK_LAYER_RANGES = [(s, min(s + UPPER_BLOCK_SIZE, config.n_layer))
+                          for s in range(K, config.n_layer, UPPER_BLOCK_SIZE)]
+    num_stages = len(BLOCK_LAYER_RANGES)
     model = GPT(config)
     if resume_state:
         model.load_state_dict(resume_state["model"])
@@ -117,33 +132,41 @@ def main():
     stage_steps = max(1, (target_tokens // tokens_per_step) // num_stages)
     run_id = resume_state["config"]["run_id"] if resume_state else datetime.now().strftime("%Y%m%d_%H%M%S")
     checkpoint_dir = os.path.dirname(os.path.abspath(args.resume)) if args.resume else \
-        os.path.join(ck["dir"], f"k{K}_{run_id}")
+        os.path.join(ck["dir"], f"k{K}_bs{UPPER_BLOCK_SIZE}_{run_id}")
     os.makedirs(checkpoint_dir, exist_ok=True)
     start_stage = resume_state["stage"] if resume_state else 0
     start_step = resume_state["stage_step"] if resume_state else 0
     tokens_processed = resume_state["tokens_processed"] if resume_state else 0
 
+    def stage_label(start, end):
+        return str(start) if end - start == 1 else f"{start}to{end - 1}"
+
     run_config = {
-        "run_id": run_id, "k": K, "target_tokens": target_tokens,
+        "run_id": run_id, "k": K, "upper_block_size": UPPER_BLOCK_SIZE,
+        "block_layer_ranges": BLOCK_LAYER_RANGES, "target_tokens": target_tokens,
         "correct_threshold": args.correct_threshold, "preserve_threshold": args.preserve_threshold,
         "refine_weight": args.refine_weight, "preserve_weight": args.preserve_weight,
         "stage_steps": stage_steps, "source_checkpoint": args.source_checkpoint,
     }
     experiment = init_experiment(
         cfg["comet"],
-        name=f"Cascade-SID_k{K}_{run_id}",
-        tags=["cascade-sid", "frozen-backbone", "three-zone", "k6"],
+        name=f"Cascade-SID_k{K}_bs{UPPER_BLOCK_SIZE}_{run_id}",
+        tags=["cascade-sid", "frozen-backbone" if K > 0 else "no-backbone", "three-zone",
+              f"k{K}", f"blocksize{UPPER_BLOCK_SIZE}"],
         parameters={**run_config, "micro_batch_size": micro_batch_size,
                     "grad_accumulation_steps": grad_accum, "dtype": dtype},
     )
 
     def stage_optimizer(stage):
-        for index, layer in enumerate(model.transformer.h[K:]):
-            for parameter in layer.parameters():
-                parameter.requires_grad = index == stage
-        for parameter in model.transformer.h[K + stage].parameters():
-            parameter.requires_grad = True
-        params = list(model.transformer.h[K + stage].parameters()) + [alphas[stage]]
+        start, end = BLOCK_LAYER_RANGES[stage]
+        for index, (s, e) in enumerate(BLOCK_LAYER_RANGES):
+            for layer in model.transformer.h[s:e]:
+                for parameter in layer.parameters():
+                    parameter.requires_grad = index == stage
+        params = []
+        for layer in model.transformer.h[start:end]:
+            params += list(layer.parameters())
+        params += [alphas[stage]]
         decay = [p for p in params if p.dim() >= 2]
         no_decay = [p for p in params if p.dim() < 2]
         return torch.optim.AdamW([{"params": decay, "weight_decay": weight_decay},
@@ -156,8 +179,9 @@ def main():
             innovations = []
             previous = None
             for previous_stage in range(stage):
+                s, e = BLOCK_LAYER_RANGES[previous_stage]
                 inp = h0 if previous is None else h0 + previous
-                out = forward_range(model, inp, K + previous_stage, K + previous_stage + 1)
+                out = forward_range(model, inp, s, e)
                 previous = out - inp
                 innovations.append(previous)
         return h0, innovations
@@ -165,15 +189,18 @@ def main():
     def evaluate(stage):
         model.eval()
         generator = torch.Generator().manual_seed(eval_seed)
-        totals = {"combined_ce": 0.0, "correct_ce": 0.0, "refine_ce": 0.0, "preserve_kl": 0.0}
+        totals = {"combined_ce": 0.0, "correct_ce": 0.0, "refine_ce": 0.0, "preserve_kl": 0.0,
+                  "correct_fraction": 0.0, "refine_fraction": 0.0, "preserve_fraction": 0.0,
+                  "fix_minus_break": 0.0}
         with torch.no_grad():
             for _ in range(validation_batches):
                 x, y = get_batch("validation", micro_batch_size, config.block_size, device,
                                   data_cfg["data_dir"], generator=generator)
                 h0, previous = frozen_prefix(x, stage)
                 inp = h0 if not previous else h0 + previous[-1]
+                start, end = BLOCK_LAYER_RANGES[stage]
                 with ctx:
-                    out = forward_range(model, inp, K + stage, K + stage + 1)
+                    out = forward_range(model, inp, start, end)
                     innovation = out - inp
                     _, values = cascade_three_zone_loss(model, h0, previous, alphas[:stage], innovation, alphas[stage], y,
                                                          args.correct_threshold, args.preserve_threshold,
@@ -193,7 +220,9 @@ def main():
             optimizer.load_state_dict(resume_state["optimizer"])
         metrics_every = max(1, stage_steps // 30)
         validation_every = max(1, stage_steps // 5)
-        print(f"stage {stage + 1}/{num_stages}: {stage_steps} steps, resume from {step0}")
+        stage_start, stage_end = BLOCK_LAYER_RANGES[stage]
+        print(f"stage {stage + 1}/{num_stages} (layers {stage_label(stage_start, stage_end)}): "
+              f"{stage_steps} steps, resume from {step0}")
         for step in range(step0 + 1, stage_steps + 1):
             t0 = time.perf_counter()
             lr = get_lr(step - 1, peak_lr, peak_lr / 10, max(1, round(stage_steps * .03)), stage_steps)
@@ -204,8 +233,9 @@ def main():
                 x, y = get_batch("train", micro_batch_size, config.block_size, device, data_cfg["data_dir"])
                 h0, previous = frozen_prefix(x, stage)
                 inp = h0 if not previous else h0 + previous[-1]
+                start, end = BLOCK_LAYER_RANGES[stage]
                 with ctx:
-                    out = forward_range(model, inp, K + stage, K + stage + 1)
+                    out = forward_range(model, inp, start, end)
                     innovation = out - inp
                     loss, last_values = cascade_three_zone_loss(model, h0, previous, alphas[:stage], innovation, alphas[stage], y,
                                                                  args.correct_threshold, args.preserve_threshold,
@@ -229,6 +259,9 @@ def main():
                 log.update({f"train/{k}": v for k, v in last_representation.items()})
                 log.update({"train/lr": lr, "train/grad_norm": grad_norm.item(), "train/alpha": alphas[stage].item(),
                             "train/tokens_processed": tokens_processed, "train/step_time_s": time.perf_counter() - t0})
+                if device_type == "cuda":
+                    log["train/vram_allocated_mib"] = torch.cuda.memory_allocated() / (1024 ** 2)
+                    log["train/vram_reserved_mib"] = torch.cuda.memory_reserved() / (1024 ** 2)
                 experiment.log_metrics(log, step=tokens_processed)
                 print(f"stage {stage + 1} step {step}: ce={last_values['combined_ce']:.4f} alpha={alphas[stage].item():.4f}")
             if step % validation_every == 0 or step == stage_steps:

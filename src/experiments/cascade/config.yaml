@@ -17,6 +17,7 @@ data:
 
 cascade:
   k: 6
+  block_size: 1          # сколько transformer-слоёв объединяются в один stage
   source_checkpoint: checkpoints/checkpoint_100pct.pt
   correct_threshold: 0.2
   preserve_threshold: 0.8
