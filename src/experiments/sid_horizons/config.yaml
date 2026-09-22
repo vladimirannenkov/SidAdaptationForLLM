@@ -1,0 +1,51 @@
+# SID-Horizons: backbone (k=4 слоёв) заморожен из E2E-чекпоинта — та же
+# точка, что уже проверенный SID-F k=4/bs=2 (+3.82%, docs/memory.md), прямое
+# сравнение с ним. 4 верхних блока по 2 слоя; каждому назначен свой ОСНОВНОЙ
+# горизонт предсказания (1/2/4/8 токенов вперёд) + вспомогательная
+# next-token коррекция с весом beta. Идея: заставить блоки архитектурно
+# извлекать разные предиктивные признаки (а не полагаться на искусственное
+# снижение CKA, как --lambda-div в SID-F) — блок с горизонтом 1 обходится
+# без вспомогательного члена (он же и есть next-token).
+model:
+  block_size: 256
+  vocab_size: 16384
+  n_layer: 12
+  n_head: 4
+  n_embd: 272
+  dropout: 0.0
+  bias: true
+
+data:
+  data_dir: data/wikitext
+
+sid:
+  k: 4
+  block_size: 2                 # слоёв на верхний блок -> 4 блока (K..K+2..K+4..K+6..n_layer)
+  source_checkpoint: checkpoints/checkpoint_50pct.pt
+  horizons: [1, 2, 4, 8]         # основной горизонт каждого верхнего блока по порядку
+  beta: 0.1                      # вес вспомогательной next-token коррекции
+
+train:
+  micro_batch_size: 64
+  grad_accumulation_steps: 4
+  grad_clip: 1.0
+  peak_lr: 3.0e-4
+  weight_decay: 0.1
+  betas: [0.9, 0.95]
+  target_tokens: 100000000
+  min_train_metric_points: 30
+  validation_every: 100
+  validation_batches: 20
+  eval_seed: 1337
+
+checkpoint:
+  dir: checkpoints_sid_horizons
+
+comet:
+  enabled: true
+  workspace: team-rl-exp
+
+smoke:
+  target_tokens: 200000
+  validation_every: 5
+  validation_batches: 2
