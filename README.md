@@ -9,8 +9,10 @@
 | SID-P-blocks | `src/experiments/sid_p_blocks/` | Backbone из E2E-чекпоинта, не заморожен, consistency-KL | +1.4% от глубины |
 | SID-P-Boost | `src/experiments/sid_p_boost/` | То же, но boosting-лосс вместо consistency-KL | +4.6% от глубины |
 | SID-F | `src/experiments/sid_f/` | Backbone заморожен, чистый локальный CE | +6.9% от глубины (k=3) |
-| Newton-SID | `src/experiments/newton_sid/` | Boosting + квадратичный Newton-лосс на коррекцию блока | отрицательный (см. memory.md) |
-| Cascade-SID | `src/experiments/cascade/` | Последовательные заморожены-навсегда stages, three-zone loss | smoke — чисто, полный прогон не зафиксирован |
+| Newton-SID | `src/experiments/newton_sid/` | Boosting + квадратичный Newton-лосс на коррекцию блока | отрицательный (пилот, не масштабировался) |
+| Cascade-SID | `src/experiments/cascade/` | Последовательные заморожены-навсегда stages, three-zone loss, конфигурируемый block-size и k | val_ppl 193.05 (k=6, bs=2) |
+| SID-Horizons | `src/experiments/sid_horizons/` | Каждый блок — свой горизонт предсказания (1/2/4/8) + доп. next-token лосс | val_ppl 101.43 (k=4, bs=2) |
+| SID-VocabModules | `src/experiments/sid_vocab_modules/` | Boosting, коррекция каждого блока — через фиксированную sparse-проекцию своего подпространства словаря | val_ppl 228.5 (лучший блок, k=6) |
 
 
 ## Структура репозитория
@@ -28,7 +30,6 @@ tests/           короткие проверочные скрипты (сгр�
 tools/
   profiling/     замеры throughput/VRAM/batch size
   analysis/      разовые аналитические скрипты (CKA, linear probe, Tuned Lens визуализация)
-docs/            план, журнал (краткий + полный), отчёты об экспериментах, логи прогонов
 reference/nanogpt_pinned/  пиннутые файлы апстрима nanoGPT (только для цитирования, не импортируются)
 data/wikitext/   данные: tokenizer/ (в git), raw_cache/ и bin/ (в .gitignore, воспроизводимы)
 checkpoints*/    чекпоинты обучения (в .gitignore, большие)
